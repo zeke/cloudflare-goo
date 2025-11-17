@@ -9,29 +9,50 @@ import subprocess
 import os
 
 
+def hex_to_rgb(hex_color: str) -> tuple[float, float, float]:
+    """Convert hex color to normalized RGB values (0.0-1.0)"""
+    hex_color = hex_color.lstrip('#')
+    r = int(hex_color[0:2], 16) / 255.0
+    g = int(hex_color[2:4], 16) / 255.0
+    b = int(hex_color[4:6], 16) / 255.0
+    return (r, g, b)
+
+
 def goo(
     seed: int = Input(
         default=-1,
         description="Seed for the random number generator",
     ),
     width: int = Input(
-        default=512,
+        default=1024,
         description="Dimension of the output image",
         ge=1,
         le=4096,
     ),
     height: int = Input(
-        default=512,
+        default=1024,
         description="Height of the output image",
         ge=1,
         le=4096,
+    ),
+    color1: str = Input(
+        default="#F38020",
+        description="First color (hex format)",
+    ),
+    color2: str = Input(
+        default="#F48120",
+        description="Second color (hex format)",
+    ),
+    color3: str = Input(
+        default="#FAAD3F",
+        description="Third color (hex format)",
     ),
     scale: int = 1,
     depth: int = 3,
     format: str = Input(
         description="Format of the output (image or video)",
         choices=["png", "jpeg", "tiff", "mp4"],
-        default="png",
+        default="mp4",
     ),
     speed: float = Input(
         default=2.0,
@@ -50,6 +71,10 @@ def goo(
         description="Frames per second for video output (only used when format is mp4)",
         ge=1,
         le=60,
+    ),
+    pingpong: bool = Input(
+        default=True,
+        description="Play video forward then backward (only used when format is mp4)",
     ),
 ) -> Path:
     if seed == -1:
@@ -74,10 +99,9 @@ def goo(
         uniform vec2 iResolution;
         uniform float iTime;
         uniform vec2 iMouse;
-
-        vec3 color1 = vec3(235.0/255.0, 231.0/255.0, 92.0/255.0);
-        vec3 color2 = vec3(223.0/255.0, 72.0/255.0, 67.0/255.0);
-        vec3 color3 = vec3(235.0/255.0, 64.0/255.0, 240.0/255.0);
+        uniform vec3 color1;
+        uniform vec3 color2;
+        uniform vec3 color3;
 
         vec2 effect(vec2 p, float i, float time) {{
             vec2 mouse = vec2(0.0, 0.0); // Ignoring mouse input as per instructions
@@ -122,9 +146,17 @@ def goo(
     vao = ctx.simple_vertex_array(prog, vbo, "position")
     fbo = ctx.framebuffer(color_attachments=[ctx.texture((width, height), 4)])
 
+    # Convert hex colors to RGB and set uniforms
+    rgb1 = hex_to_rgb(color1)
+    rgb2 = hex_to_rgb(color2)
+    rgb3 = hex_to_rgb(color3)
+    prog["color1"].value = rgb1
+    prog["color2"].value = rgb2
+    prog["color3"].value = rgb3
+
     if format == "mp4":
         # Set up FFmpeg process for MP4/H.264 encoding
-        filename = "/tmp/output.mp4"
+        temp_filename = "/tmp/output_temp.mp4" if pingpong else "/tmp/output.mp4"
         ffmpeg_cmd = [
             'ffmpeg',
             '-y',  # Overwrite output file if it exists
@@ -140,9 +172,9 @@ def goo(
             '-pix_fmt', 'yuv420p',  # Required for browser compatibility
             '-movflags', '+faststart',  # Enable streaming
             '-crf', '23',  # Quality setting (lower = better, 23 is a good default)
-            filename
+            temp_filename
         ]
-        
+
         ffmpeg_process = subprocess.Popen(
             ffmpeg_cmd,
             stdin=subprocess.PIPE,
@@ -163,24 +195,46 @@ def goo(
                 data = fbo.read(components=3)
                 image = Image.frombytes("RGB", fbo.size, data)
                 image = image.transpose(Image.FLIP_TOP_BOTTOM)
-                
+
                 # Write raw frame data directly to FFmpeg's stdin
                 ffmpeg_process.stdin.write(image.tobytes())
-            
+
             # Close stdin and wait for FFmpeg to finish
             ffmpeg_process.stdin.close()
             ffmpeg_process.wait()
-            
+
             if ffmpeg_process.returncode != 0:
                 raise RuntimeError(f"FFmpeg encoding failed with error: {ffmpeg_process.stderr.read().decode()}")
-                
+
         finally:
             # Ensure resources are cleaned up
             if ffmpeg_process.poll() is None:
                 ffmpeg_process.terminate()
                 ffmpeg_process.wait()
 
-        return Path(filename)
+        # Apply pingpong effect if enabled
+        if pingpong:
+            final_filename = "/tmp/output.mp4"
+            subprocess.run([
+                "ffmpeg",
+                "-i", temp_filename,
+                "-filter_complex", "[0:v]reverse[r];[0:v][r]concat=n=2:v=1[v]",
+                "-map", "[v]",
+                "-an",  # Remove audio
+                "-c:v", "libx264",
+                "-preset", "fast",
+                "-profile:v", "baseline",
+                "-pix_fmt", "yuv420p",
+                "-movflags", "+faststart",
+                "-crf", "23",
+                "-y", final_filename
+            ], check=True)
+
+            # Clean up temporary file
+            os.remove(temp_filename)
+            return Path(final_filename)
+        else:
+            return Path(temp_filename)
     else:
         # Original image generation code
         fbo.use()
