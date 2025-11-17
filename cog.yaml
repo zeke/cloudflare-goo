@@ -7,10 +7,9 @@ build:
   system_packages:
     - mesa-utils
     - "libffi-dev"
-    - libegl1-mesa
+    - libegl1
     - xvfb
     - ffmpeg
-    - libx264-dev
 
   python_version: "3.11"
 

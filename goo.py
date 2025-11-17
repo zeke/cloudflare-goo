@@ -55,7 +55,7 @@ def goo(
         default="mp4",
     ),
     speed: float = Input(
-        default=2.0,
+        default=6.0,
         description="Speed of the goo animation effect",
         ge=0.0,
         le=10.0,
@@ -75,6 +75,12 @@ def goo(
     pingpong: bool = Input(
         default=True,
         description="Play video forward then backward (only used when format is mp4)",
+    ),
+    dithering: float = Input(
+        default=0.01,
+        description="Amount of dithering noise for stylistic effect (0.0 = none, 0.01 = subtle, 0.5+ = heavy grain)",
+        ge=0.0,
+        le=1.0,
     ),
 ) -> Path:
     if seed == -1:
@@ -102,10 +108,15 @@ def goo(
         uniform vec3 color1;
         uniform vec3 color2;
         uniform vec3 color3;
+        uniform float dithering;
 
         vec2 effect(vec2 p, float i, float time) {{
             vec2 mouse = vec2(0.0, 0.0); // Ignoring mouse input as per instructions
             return vec2(sin(p.x * i + time) * cos(p.y * i + time), sin(length(p.x)) * cos(length(p.y)));
+        }}
+
+        float random(vec2 co) {{
+            return fract(sin(dot(co.xy, vec2(12.9898, 78.233))) * 43758.5453);
         }}
 
         void main() {{
@@ -119,6 +130,11 @@ def goo(
                 p += effect(p, fi, iTime * ({speed:.1f}/10));
             }}
             vec3 col = mix(mix(color1, color2, 1.0-sin(p.x)), color3, cos(p.y+p.x));
+
+            // Apply dithering
+            float noise = random(gl_FragCoord.xy + iTime) * 2.0 - 1.0;
+            col += noise * dithering;
+
             gl_FragColor = vec4(col, 1.0);
         }}
     """,
@@ -153,6 +169,7 @@ def goo(
     prog["color1"].value = rgb1
     prog["color2"].value = rgb2
     prog["color3"].value = rgb3
+    prog["dithering"].value = dithering
 
     if format == "mp4":
         # Set up FFmpeg process for MP4/H.264 encoding
